@@ -181,7 +181,7 @@ wire [21:0] gamma_bus;
 
 wire [15:0] joy1 = |status[31:30] ? {
 	joydb9md_1[5], // btn_cheat -> C 
-	joydb9md_1[8] | joydb9md_1[11] | (joydb9md_1[7] & joydb9md_1[6]),// Mode | Z | Stat + A -> Coin
+	joydb9md_1[8] | joydb9md_1[11] | (joydb9md_1[7] & joydb9md_1[6]),// Mode | Z | Start + A -> Coin
 	joydb9md_1[10],// _start_2	-> Y (dummy)
 	joydb9md_1[7], // _start_1  -> Start
 	joydb9md_1[4], // btn_fireA -> B
@@ -194,7 +194,7 @@ wire [15:0] joy1 = |status[31:30] ? {
 
 wire [15:0] joy2 =  status[31]    ? {
 	joydb9md_2[5], // btn_cheat -> C 
-	joydb9md_2[8] | joydb9md_2[11] | (joydb9md_2[7] & joydb9md_2[6]),// Mode | Z | Stat + A -> Coin
+	joydb9md_2[8] | joydb9md_2[11] | (joydb9md_2[7] & joydb9md_2[6]),// Mode | Z | Start + A -> Coin
 	joydb9md_2[7], // _start_2  -> Start
 	joydb9md_2[10],// _start_1 -> Y (dummy)
 	joydb9md_2[4], // btn_fireA -> B
