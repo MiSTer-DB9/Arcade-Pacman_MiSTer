@@ -39,8 +39,9 @@ module emu
 	output        CE_PIXEL,
 
 	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	output [11:0] VIDEO_ARX,
-	output [11:0] VIDEO_ARY,
+	//if VIDEO_ARX[12] or VIDEO_ARY[12] is set then [11:0] contains scaled size instead of aspect ratio.
+	output [12:0] VIDEO_ARX,
+	output [12:0] VIDEO_ARY,
 
 	output  [7:0] VGA_R,
 	output  [7:0] VGA_G,
@@ -52,13 +53,17 @@ module emu
 	output [1:0]  VGA_SL,
 	output        VGA_SCALER, // Force VGA scaler
 
-	// Use framebuffer from DDRAM (USE_FB=1 in qsf)
+	input  [11:0] HDMI_WIDTH,
+	input  [11:0] HDMI_HEIGHT,
+
+`ifdef MISTER_FB
+	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
 	// FB_FORMAT:
 	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
 	//    [3]   : 0=16bits 565 1=16bits 1555
 	//    [4]   : 0=RGB  1=BGR (for 16/24/32 modes)
 	//
-	// FB_STRIDE either 0 (rounded to 256 bytes) or multiple of 16 bytes.
+	// FB_STRIDE either 0 (rounded to 256 bytes) or multiple of pixel size (in bytes)
 	output        FB_EN,
 	output  [4:0] FB_FORMAT,
 	output [11:0] FB_WIDTH,
@@ -69,6 +74,7 @@ module emu
 	input         FB_LL,
 	output        FB_FORCE_BLANK,
 
+`ifdef MISTER_FB_PALETTE
 	// Palette control for 8bit modes.
 	// Ignored for other video modes.
 	output        FB_PAL_CLK,
@@ -76,6 +82,8 @@ module emu
 	output [23:0] FB_PAL_DOUT,
 	input  [23:0] FB_PAL_DIN,
 	output        FB_PAL_WR,
+`endif
+`endif
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
@@ -85,10 +93,26 @@ module emu
 	output  [1:0] LED_POWER,
 	output  [1:0] LED_DISK,
 
+	// I/O board button press simulation (active high)
+	// b[1]: user button
+	// b[0]: osd button
+	output  [1:0] BUTTONS,
+
 	input         CLK_AUDIO, // 24.576 MHz
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
-	output        AUDIO_S,    // 1 - signed audio samples, 0 - unsigned
+	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
+	output  [1:0] AUDIO_MIX, // 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
+
+	//ADC
+	inout   [3:0] ADC_BUS,
+
+	//SD-SPI
+	output        SD_SCK,
+	output        SD_MOSI,
+	input         SD_MISO,
+	output        SD_CS,
+	input         SD_CD,
 
 	//High latency DDR3 RAM interface
 	//Use for non-critical time purposes
@@ -103,6 +127,40 @@ module emu
 	output  [7:0] DDRAM_BE,
 	output        DDRAM_WE,
 
+	//SDRAM interface with lower latency
+	output        SDRAM_CLK,
+	output        SDRAM_CKE,
+	output [12:0] SDRAM_A,
+	output  [1:0] SDRAM_BA,
+	inout  [15:0] SDRAM_DQ,
+	output        SDRAM_DQML,
+	output        SDRAM_DQMH,
+	output        SDRAM_nCS,
+	output        SDRAM_nCAS,
+	output        SDRAM_nRAS,
+	output        SDRAM_nWE,
+
+`ifdef MISTER_DUAL_SDRAM
+	//Secondary SDRAM
+	//Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
+	input         SDRAM2_EN,
+	output        SDRAM2_CLK,
+	output [12:0] SDRAM2_A,
+	output  [1:0] SDRAM2_BA,
+	inout  [15:0] SDRAM2_DQ,
+	output        SDRAM2_nCS,
+	output        SDRAM2_nCAS,
+	output        SDRAM2_nRAS,
+	output        SDRAM2_nWE,
+`endif
+
+	input         UART_CTS,
+	output        UART_RTS,
+	input         UART_RXD,
+	output        UART_TXD,
+	output        UART_DTR,
+	input         UART_DSR,
+
 	// Open-drain User port.
 	// 0 - D+/RX
 	// 1 - D-/TX
@@ -111,13 +169,18 @@ module emu
 	output	  USER_OSD,
 	output  [1:0] USER_MODE,
 	input	[7:0] USER_IN,
-	output  [7:0] USER_OUT
+	output  [6:0] USER_OUT,
+	input         OSD_STATUS
 );
+
+assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
+assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
-wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
+wire   [2:0] JOY_FLAG  = {status[62],status[63],status[61]}; //Assign 3 bits of status (31:29) o (63:61)
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
 wire   [5:0] JOY_MDIN  = JOY_FLAG[2] ? {USER_IN[6],USER_IN[3],USER_IN[5],USER_IN[7],USER_IN[1],USER_IN[2]} : '1;
 wire         JOY_DATA  = JOY_FLAG[1] ? USER_IN[5] : '1;
@@ -129,6 +192,9 @@ assign       USER_OSD  = joydb_1[10] & joydb_1[6];
 assign LED_USER  = ioctl_download;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
+assign BUTTONS   = 0;
+assign AUDIO_MIX = 0;
+assign FB_FORCE_BLANK = 0;
 
 wire [1:0] ar = status[15:14];
 
@@ -141,14 +207,22 @@ localparam CONF_STR = {
 	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"H1H0O2,Orientation,Vert,Horz;",
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
-	"OUV,UserIO Joystick,Off,DB9MD,DB15 ;",
-	"OT,UserIO Players, 1 Player,2 Players;",
+	"oUV,UserIO Joystick,Off,DB9MD,DB15 ;",
+	"oT,UserIO Players, 1 Player,2 Players;",
+	"O7,Flip Screen,Off,On;",
+	"OQS,CRT H-sync Adjust,0,1,2,3,4,5,6,7;",
+	"OTV,CRT V-sync Adjust,0,1,2,3,4,5,6,7;",
+	"-;",
+	"P1,Pause options;",
+	"P1OP,Pause when OSD is open,On,Off;",
+	"P1OQ,Dim video after 10s,On,Off;",
 	"-;",
 	"DIP;",
 	"-;",
 	"R0,Reset;",
-	"J1,Fire,Start 1P,Start 2P,Coin,Cheat;",
-	"jn,A,Start,Select,R,L;",
+	"J1,Fire,Start 1P,Start 2P,Coin,Cheat,Pause;",
+	"jn,A,Start,Select,R,L,X;",
+	"DEFMRA,Puck Man (Japan set 1).mra;", // default MRA to be used when core is uploaded by USB blaster (debug)
 	"V,v",`BUILD_DATE
 };
 
@@ -169,7 +243,7 @@ pll pll
 reg ce_6m;
 always @(posedge clk_sys) begin
 	reg [1:0] div;
-	
+
 	div <= div + 1'd1;
 	ce_6m <= !div;
 end
@@ -177,7 +251,7 @@ end
 reg ce_4m;
 always @(posedge clk_sys) begin
 	reg [2:0] div;
-	
+
 	div <= div + 1'd1;
 	if(div == 5) div <= 0;
 	ce_4m <= !div;
@@ -186,7 +260,7 @@ end
 reg ce_1m79;
 always @(posedge clk_sys) begin
 	reg [3:0] div;
-	
+
 	div <= div + 1'd1;
 	if(div == 12) div <= 0;
 	ce_1m79 <= !div;
@@ -300,7 +374,7 @@ wire mod_gm = mod_gork | mod_mrtnt;
 always @(posedge clk_sys) begin
 	reg [7:0] mod = 0;
 	if (ioctl_wr & (ioctl_index==1)) mod <= ioctl_dout;
-	
+
 	mod_orig <= (mod == 0);
 	mod_plus <= (mod == 1);
 	mod_club <= (mod == 2);
@@ -356,10 +430,18 @@ wire m_fire_2   = joy2[4];
 wire m_start    = joy1[5] | joy2[5];
 wire m_start_2  = joy1[6] | joy2[6];
 wire m_coin     = joy1[7] | joy2[7];
-
 wire m_cheat    = joy1[8] | joy2[8];
+wire m_pause    = joy1[9] | joy2[9];
 
-assign {FB_PAL_CLK, FB_FORCE_BLANK, FB_PAL_ADDR, FB_PAL_DOUT, FB_PAL_WR} = '0;
+// PAUSE SYSTEM
+wire				pause_cpu;
+wire [7:0]		rgb_out;
+pause #(3,3,2,24) pause (
+	.*,
+	.user_button(m_pause),
+	.pause_request(hs_pause),
+	.options(~status[26:25])
+);
 
 wire hblank, vblank;
 wire ce_vid = ce_6m;
@@ -374,7 +456,7 @@ arcade_video #(288,8) arcade_video
 	.clk_video(clk_vid),
 	.ce_pix(ce_vid),
 
-	.RGB_in({r,g,b}),
+	.RGB_in(rgb_out),
 	.HBlank(hblank),
 	.VBlank(vblank),
 	.HSync(hs),
@@ -395,6 +477,9 @@ assign AUDIO_S = mod_van;
 wire [7:0] in0xor = mod_ponp ? 8'hE0 : 8'hFF;
 wire [7:0] in1xor = mod_ponp ? 8'h00 : 8'hFF;
 
+wire reset;
+assign reset = RESET | status[0] | buttons[1];
+
 pacman pacman
 (
 	.O_VIDEO_R(r),
@@ -412,26 +497,26 @@ pacman pacman
 	.O_AUDIO(audio),
 
 	.in0(sw[0] & (in0xor ^ {
-									mod_eeek & m_fire_2,
-									mod_alib & m_fire,
-									m_coin,
-									((mod_orig | mod_plus | mod_ms | mod_bird | mod_alib | mod_woodp) & m_cheat) | ((mod_ponp | mod_van | mod_dshop) & m_fire),
-									m_down,
-									m_right,
-									m_left,
-									m_up
-								})),
+		mod_eeek & m_fire_2,
+		mod_alib & m_fire,
+		m_coin,
+		((mod_orig | mod_plus | mod_ms | mod_bird | mod_alib | mod_woodp) & m_cheat) | ((mod_ponp | mod_van | mod_dshop) & m_fire),
+		m_down,
+		m_right,
+		m_left,
+		m_up
+	})),
 
 	.in1(sw[1] & (in1xor ^ {
-									mod_gm & m_fire_2,
-									m_start_2 | (mod_eeek & m_fire) | (mod_jmpst & m_fire_2),
-									m_start   | (mod_jmpst & m_fire),
-									(mod_gm & m_fire) | ((mod_alib | mod_ponp | mod_van | mod_dshop) & m_fire_2),
-									~mod_pmm & m_down_2,
-									mod_pmm ? m_fire : m_right_2,
-									~mod_pmm & m_left_2,
-									~mod_pmm & m_up_2
-								})),
+		mod_gm & m_fire_2,
+		m_start_2 | (mod_eeek & m_fire) | (mod_jmpst & m_fire_2),
+		m_start   | (mod_jmpst & m_fire),
+		(mod_gm & m_fire) | ((mod_alib | mod_ponp | mod_van | mod_dshop) & m_fire_2),
+		~mod_pmm & m_down_2,
+		mod_pmm ? m_fire : m_right_2,
+		~mod_pmm & m_left_2,
+		~mod_pmm & m_up_2
+	})),
 	.dipsw1(sw[2]),
 	.dipsw2((mod_ponp | mod_van | mod_dshop) ? sw[3] : 8'hFF),
 
@@ -448,40 +533,56 @@ pacman pacman
 	.mod_dshop(mod_dshop),
 	.mod_glob(mod_glob),
 	.mod_club(mod_club),
+	.flip_screen(status[7]),
+	.h_offset(status[28:26]),
+	.v_offset(status[31:29]),
 
-	.RESET(RESET | status[0] | buttons[1]),
+	.RESET(reset),
 	.CLK(clk_sys),
 	.ENA_6(ce_6m),
 	.ENA_4(ce_4m),
 	.ENA_1M79(ce_1m79),
-	
-	
-	.ram_address(ram_address),
-	.ram_data_hi(ioctl_din),
-	.ram_data_in(hiscore_to_ram),
-	.ram_data_write(hiscore_write)
+
+	.pause(pause_cpu),
+
+	.hs_address(hs_address),
+	.hs_data_in(hs_data_in),
+	.hs_data_out(ioctl_din),
+	.hs_write(hs_write),
+	.hs_access(hs_access)
 );
 
+// HISCORE SYSTEM
+// --------------
 
+wire [11:0]hs_address;
+wire [7:0]hs_data_in;
+wire hs_write;
+wire hs_access;
+wire hs_pause;
 
-wire [11:0]ram_address;
-wire [7:0]hiscore_to_ram;
-wire hiscore_write;
+hiscore #(
+	.HS_ADDRESSWIDTH(12),
+	.CFG_ADDRESSWIDTH(3),
+	.CFG_LENGTHWIDTH(2)
+) hi (
+	.clk(clk_sys),
+	.reset(reset),
+	.ioctl_upload(ioctl_upload),
+	.ioctl_download(ioctl_download),
+	.ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr),
+	.ioctl_dout(ioctl_dout),
+	.ioctl_din(ioctl_din),
+	.ioctl_index(ioctl_index),
 
-hiscore hi (
-   .clk(clk_sys),
-   .ioctl_upload(ioctl_upload),
-   .ioctl_download(ioctl_download),
-   .ioctl_wr(ioctl_wr),
-   .ioctl_addr(ioctl_addr),
-   .ioctl_dout(ioctl_dout),
-   .ioctl_din(ioctl_din),
-   .ioctl_index(ioctl_index),
-   .ram_address(ram_address),
-	.data_to_ram(hiscore_to_ram),
-	.ram_write(hiscore_write)
+	.ram_address(hs_address),
+	.data_to_ram(hs_data_in),
+	.ram_write(hs_write),
+	.ram_access(hs_access),
+	.pause_cpu(hs_pause)
 );
- 
+
 
 endmodule
 
@@ -500,15 +601,15 @@ wire [3:0] innew = in1 & ~in2;
 assign outdir = in1 & mask;
 
 always @(posedge clk) begin
-	
+
 	in1 <= indir;
 	in2 <= in1;
-	
+
 	if(innew[0]) mask <= 1;
 	if(innew[1]) mask <= 2;
 	if(innew[2]) mask <= 4;
 	if(innew[3]) mask <= 8;
-	
+
 	if(!(indir & mask) || dis) mask <= '1;
 end
 
