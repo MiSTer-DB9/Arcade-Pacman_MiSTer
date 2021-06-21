@@ -84,16 +84,23 @@ port
 	mod_dshop  : in  std_logic;
 	mod_club   : in  std_logic;
 
+	flip_screen : in  std_logic;
+	h_offset    : in  std_logic_vector(2 downto 0);
+	v_offset    : in  std_logic_vector(2 downto 0);
+
 	--
 	dn_addr    : in  std_logic_vector(15 downto 0);
 	dn_data    : in  std_logic_vector(7 downto 0);
 	dn_wr      : in  std_logic;
-	
+
+	pause      : in  std_logic;
+
 	-- high score
-	ram_address: in  std_logic_vector(11 downto 0);
-	ram_data_hi   : out std_logic_vector(7 downto 0);
-	ram_data_in: in  std_logic_vector(7 downto 0);
-	ram_data_write:  in std_logic;
+	hs_address  : in  std_logic_vector(11 downto 0);
+	hs_data_in  : in  std_logic_vector(7 downto 0);
+	hs_data_out : out std_logic_vector(7 downto 0);
+	hs_write    : in  std_logic;
+	hs_access   : in  std_logic;
 
 	--
 	RESET      : in  std_logic;
@@ -108,8 +115,9 @@ architecture RTL of PACMAN is
 	-- timing
 	signal hcnt             : std_logic_vector(8 downto 0) := "010000000"; -- 80
 	signal vcnt             : std_logic_vector(8 downto 0) := "011111000"; -- 0F8
+	signal vcnt_offset      : std_logic_vector(8 downto 0);
 
-	signal do_hsync         : boolean;
+	signal do_vcnt_check    : boolean;
 	signal hsync            : std_logic;
 	signal vsync            : std_logic;
 	signal hblank           : std_logic;
@@ -230,7 +238,7 @@ begin
 			hcnt <= hcnt +"1";
 		end if;
 		-- hcnt 8 on circuit is 256H_L
-		if do_hsync then
+		if do_vcnt_check then
 			if vcnt = "111111111" then
 				vcnt <= "011111000"; -- 0F8
 			else
@@ -240,8 +248,9 @@ begin
 	end if;
 end process;
 
-vsync <= not vcnt(8);
-do_hsync <= (hcnt = "010101111"); -- 0AF
+vcnt_offset <= vcnt + v_offset;
+vsync <= not vcnt_offset(8);
+do_vcnt_check <= (hcnt = "010101111"); -- 0AF
 
 p_sync : process
 begin
@@ -260,13 +269,13 @@ begin
 			O_HBLANK <= '0';
 		end if;
 
-		if do_hsync then
+		if (hcnt = "010101111" + h_offset) then -- 0AF (+h_offset)
 			hsync <= '1';
-		elsif (hcnt = "011001111") then -- 0CF
+		elsif (hcnt = "011001111" + h_offset) then -- 0CF (+h_offset)
 			hsync <= '0';
 		end if;
 
-		if do_hsync then
+		if do_vcnt_check then
 			if (vcnt = "111101111") then -- 1EF
 				vblank <= '1';
 			elsif (vcnt = "100001111") then -- 10F
@@ -284,7 +293,7 @@ p_irq_req_watchdog : process
 begin
 	wait until rising_edge(clk);
 	if (ena_6 = '1') then
-		rising_vblank := do_hsync and (vcnt = "111101111"); -- 1EF
+		rising_vblank := (hcnt = "010101111") and (vcnt = "111101111"); -- AF and 1EF
 		-- interrupt 8c
 
 		if (c_int = '0') then
@@ -298,6 +307,8 @@ begin
 		if (reset = '1') then
 			watchdog_cnt <= X"FF";
 		elsif (iodec_wdr_l = '0') then
+			watchdog_cnt <= X"00";
+		elsif (pause = '1') then
 			watchdog_cnt <= X"00";
 		elsif rising_vblank then
 			watchdog_cnt <= watchdog_cnt + "1";
@@ -315,7 +326,7 @@ port map (
 	RESET_n => watchdog_reset_l and (not reset),
 	CLK_n   => clk,
 	CLKEN   => hcnt(0) and ena_6,
-	WAIT_n  => sync_bus_wreq_l,
+	WAIT_n  => sync_bus_wreq_l and (not pause),
 	INT_n   => cpu_int_l or     mod_van,
 	NMI_n   => cpu_int_l or not mod_van,
 	BUSRQ_n => '1',
@@ -340,7 +351,7 @@ sync_bus_cs_l   <= '0' when cpu_mreq_l = '0' and cpu_rfsh_l = '1' and cpu_addr(1
 sync_bus_wreq_l <= '0' when sync_bus_cs_l = '0' and hcnt(1) = '1' and cpu_rd_l = '0' else '1';
 sync_bus_stb    <= '0' when sync_bus_cs_l = '0' and hcnt(1) = '0' else '1';
 sync_bus_r_w_l  <= '0' when sync_bus_stb  = '0' and cpu_rd_l = '1' else '1';
-  
+ 
 --
 -- sync bus custom ic
 --
@@ -508,10 +519,10 @@ begin
 		elsif (iodec_out_l = '0') then
 			control_reg(to_integer(unsigned(cpu_addr(2 downto 0)))) <= cpu_data_out(0);
 		end if;
-	end if; 
+	end if;
 end process;
 
-c_flip <= control_reg(1) when mod_alib = '1' else control_reg(5) when mod_bird = '1' else control_reg(3);
+c_flip <= flip_screen xor control_reg(1) when mod_alib = '1' else flip_screen xor control_reg(5) when mod_bird = '1' else control_reg(3) xor flip_screen;
 c_sound<= control_reg(0) when mod_alib = '1' else control_reg(3) when mod_bird = '1' else control_reg(1);
 c_int  <= control_reg(2) when mod_alib = '1' else control_reg(1) when mod_bird = '1' else control_reg(0);
 
@@ -526,7 +537,7 @@ begin
 		end if;
 	end if;
 end process;
-  
+ 
 
 inj <= in0(3 downto 0) when control_reg(5 downto 4) = "01" or mod_club = '0' else
        in1(3 downto 0) when control_reg(5 downto 4) = "10" else
@@ -556,12 +567,13 @@ port map
 	data_a    => cpu_data_out, -- cpu only source of ram data
 	q_a       => ram_data,
 	clock_b   => clk,
-	address_b => ram_address,
-   wren_b    => ram_data_write,
-	data_b    => ram_data_in,
-	q_b       => ram_data_hi
+	address_b => hs_address,
+   enable_b  => hs_access,
+	wren_b    => hs_write,
+	data_b    => hs_data_in,
+	q_b       => hs_data_out
 
-	
+
 );
 
 ram2_we <= '1' when cpu_wr_l = '0' and cpu_mreq_l = '0' and cpu_rfsh_l = '1' else '0';
@@ -618,7 +630,7 @@ port map(
 	dn_data  => dn_data,
 	dn_wr    => dn_wr
 );
-	
+
 --
 -- video subsystem
 --
@@ -646,7 +658,8 @@ port map (
 	MRTNT     => mod_mrtnt or mod_woodp,
 	PONP      => mod_ponp and not mod_van,
 	ENA_6     => ena_6,
-	CLK       => clk
+	CLK       => clk,
+	flip_screen => flip_screen
 );
 
 O_HSYNC   <= hSync;
@@ -671,9 +684,9 @@ port map (
 	dn_addr       => dn_addr,
 	dn_data       => dn_data,
 	dn_wr         => dn_wr,
-	--		
+	--
 	O_AUDIO       => wav4u,
-	ENA_6         => ena_6,
+	ENA_6         => ena_6 and (not pause),
 	CLK           => clk
 );
 
