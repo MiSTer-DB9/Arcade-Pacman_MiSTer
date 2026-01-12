@@ -57,6 +57,8 @@ module emu
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
 	output        HDMI_FREEZE,
+	output        HDMI_BLACKOUT,
+	output        HDMI_BOB_DEINT,
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
@@ -198,6 +200,9 @@ assign BUTTONS   = 0;
 assign AUDIO_MIX = 0;
 assign FB_FORCE_BLANK = 0;
 assign HDMI_FREEZE = 0;
+assign HDMI_BLACKOUT = 0;
+assign HDMI_BOB_DEINT = 0;
+
 assign VGA_DISABLE = 0;
 
 wire [1:0] ar = status[15:14];
@@ -474,7 +479,7 @@ arcade_video #(288,8) arcade_video
 );
 
 wire no_rotate = status[2] | direct_video | mod_ponp;
-wire rotate_ccw = 0;
+wire rotate_ccw = mod_dshop | mod_van;
 wire flip = 0;
 wire video_rotated;
 screen_rotate screen_rotate (.*);
@@ -528,7 +533,7 @@ pacman pacman
 		(~mod_pmm & m_up_2) | (mod_numcr&m_fire)
 	})),
 	
-	.dipsw1(sw[2]),
+	.dipsw1((mod_dshop | mod_van) ? (sw[2] ^ 8'h02) : sw[2]),
 	.dipsw2((mod_numcr| mod_ponp | mod_van | mod_dshop) ? sw[3] : 8'hFF),
 
 	.mod_plus(mod_plus),
