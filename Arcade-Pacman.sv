@@ -436,6 +436,7 @@ reg mod_pmm  = 0;
 reg mod_dshop= 0;
 reg mod_glob = 0;
 reg mod_numcr= 0;
+reg mod_jr   = 0;   // Jr. Pac-Man (mod==18). Decode wired; functional path (ROM/video/scroll) WIP — see JRPACMAN_PORT_NOTES.md
 
 wire mod_gm = mod_gork | mod_mrtnt;
 
@@ -461,6 +462,7 @@ always @(posedge clk_sys) begin
 	mod_glob <= (mod == 15);
 	mod_jmpst<= (mod == 16);
 	mod_numcr<= (mod == 17);
+	mod_jr   <= (mod == 18);
 end
 
 reg [7:0] sw[8];
@@ -592,6 +594,7 @@ pacman pacman
 	.dipsw1((mod_dshop | mod_van) ? (sw[2] ^ 8'h02) : sw[2]),
 	.dipsw2((mod_numcr| mod_ponp | mod_van | mod_dshop) ? sw[3] : 8'hFF),
 
+	.mod_jr(mod_jr),
 	.mod_plus(mod_plus),
 	.mod_jmpst(mod_jmpst),
 	.mod_bird(mod_bird),
